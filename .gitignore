@@ -1,0 +1,8 @@
+.venv/
+.firecrawl/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+dist/
+*.zip
+tests/generated/
