@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import zipfile
 
 import fitz
 from fastapi.testclient import TestClient
@@ -111,6 +112,35 @@ def make_fixture_pdf() -> bytes:
     return result
 
 
+def make_minimal_docx() -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>",
+        )
+        archive.writestr(
+            "_rels/.rels",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+            "</Relationships>",
+        )
+        archive.writestr(
+            "word/document.xml",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body><w:p><w:r><w:t>Converted document test</w:t></w:r></w:p>'
+            '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>',
+        )
+    return output.getvalue()
+
+
 def test_precision_fixture() -> None:
     result = analyze_pdf(make_fixture_pdf(), include_debug=True)
     assert result.pages[0].relevant is False
@@ -135,6 +165,14 @@ def test_api_and_rendering() -> None:
     assert rendered.status_code == 200
     assert rendered.headers["content-type"] == "application/zip"
 
+    extracted = client.post("/extract-content", files={"file": ("fixture.pdf", data, "application/pdf")})
+    assert extracted.status_code == 200
+    content = extracted.json()
+    assert content["page_count"] == 11
+    assert "Normal paragraph line 1" in content["pages"][0]["text"]
+    assert content["pages"][5]["tables"]
+    assert content["pages"][5]["tables"][0]["row_count"] >= 10
+
 
 def test_invalid_upload() -> None:
     response = TestClient(app).post("/analyze-pdf", files={"file": ("bad.pdf", b"not a pdf", "application/pdf")})
@@ -155,3 +193,13 @@ def test_repeated_asset_is_identified_as_branding() -> None:
     result = analyze_pdf(data, include_debug=True)
     assert result.relevant_pages == []
     assert all(any(x["reason"] == "repeated_branding" for x in page.debug["ignored_regions"]) for page in result.pages)
+
+
+def test_docx_conversion_endpoint() -> None:
+    response = TestClient(app).post(
+        "/convert-to-pdf",
+        files={"file": ("sample.docx", make_minimal_docx(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content.startswith(b"%PDF-")

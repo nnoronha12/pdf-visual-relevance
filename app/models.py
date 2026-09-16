@@ -21,3 +21,23 @@ class AnalysisResponse(BaseModel):
     page_count: int
     relevant_pages: list[int]
     pages: list[PageResult]
+
+
+class ExtractedTable(BaseModel):
+    table_index: int
+    bbox: list[float]
+    row_count: int
+    column_count: int
+    rows: list[list[str | None]]
+
+
+class ExtractedPage(BaseModel):
+    page: int
+    text: str
+    tables: list[ExtractedTable]
+
+
+class ContentExtractionResponse(BaseModel):
+    success: bool = True
+    page_count: int
+    pages: list[ExtractedPage]

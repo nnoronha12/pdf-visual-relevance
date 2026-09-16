@@ -8,7 +8,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from .models import AnalysisResponse
+from .content_extraction import extract_content
+from .conversion import DocumentConversionError, convert_office_to_pdf
+from .models import AnalysisResponse, ContentExtractionResponse
 from .pdf_analyzer import PDFAnalysisError, analyze_pdf
 from .rendering import render_pages_zip
 
@@ -35,6 +37,11 @@ async def read_pdf(upload: UploadFile) -> bytes:
 
 @app.exception_handler(PDFAnalysisError)
 async def analysis_error_handler(_request, exc: PDFAnalysisError):
+    return JSONResponse(status_code=422, content={"success": False, "error": str(exc)})
+
+
+@app.exception_handler(DocumentConversionError)
+async def conversion_error_handler(_request, exc: DocumentConversionError):
     return JSONResponse(status_code=422, content={"success": False, "error": str(exc)})
 
 
@@ -65,6 +72,12 @@ async def analyze_endpoint(
     return await run_in_threadpool(analyze_pdf, data, min_score, include_debug)
 
 
+@app.post("/extract-content", response_model=ContentExtractionResponse)
+async def extract_content_endpoint(file: Annotated[UploadFile, File(...)]) -> ContentExtractionResponse:
+    data = await read_pdf(file)
+    return await run_in_threadpool(extract_content, data)
+
+
 @app.post("/render-pages")
 async def render_endpoint(
     file: Annotated[UploadFile, File(...)],
@@ -73,3 +86,26 @@ async def render_endpoint(
     data = await read_pdf(file)
     archive = await run_in_threadpool(render_pages_zip, data, page_numbers)
     return StreamingResponse(io.BytesIO(archive), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="rendered_pages.zip"'})
+
+
+@app.post("/convert-to-pdf")
+async def convert_to_pdf_endpoint(file: Annotated[UploadFile, File(...)]) -> StreamingResponse:
+    filename = file.filename
+    clean_name = filename or "document"
+    extension = clean_name.rsplit(".", 1)[-1].lower() if "." in clean_name else ""
+    if extension not in {"docx", "ppt", "pptx"}:
+        raise HTTPException(status_code=415, detail="Supported input formats are .docx, .ppt, and .pptx")
+    chunks = bytearray()
+    while chunk := await file.read(1024 * 1024):
+        chunks.extend(chunk)
+        if len(chunks) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Document exceeds the 50 MB upload limit")
+    await file.close()
+    if not chunks:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+    pdf, output_name = await run_in_threadpool(convert_office_to_pdf, bytes(chunks), filename)
+    return StreamingResponse(
+        io.BytesIO(pdf),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{output_name}"'},
+    )

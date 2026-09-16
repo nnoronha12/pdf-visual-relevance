@@ -36,6 +36,27 @@ curl -X POST \
 
 The ZIP contains `page_3.png`, `page_6.png`, and `page_9.png`, rendered at 144 DPI.
 
+### Extract page text and tables
+
+```bash
+curl -X POST \
+  -F "file=@document.pdf" \
+  https://DOMAIN/extract-content
+```
+
+The JSON response contains one object per page. Each page includes its one-based page number, native extracted text, and any detected tables as normalized bounding boxes and arrays of rows/cells. This endpoint does not perform OCR, so scanned text remains the responsibility of the later vision/OCR stage.
+
+### Convert Office files to PDF
+
+```bash
+curl -X POST \
+  -F "file=@presentation.pptx" \
+  https://DOMAIN/convert-to-pdf \
+  --output presentation.pdf
+```
+
+The endpoint accepts `.docx`, `.ppt`, and `.pptx` files and returns an `application/pdf` response produced by headless LibreOffice. Inputs are stored only in a per-request temporary directory and removed immediately after conversion.
+
 ### Health
 
 ```bash
@@ -66,6 +87,7 @@ The exact formula and gates are documented beside `score_page()` in `app/visual_
 - Maximum upload: 50 MB
 - Maximum analysis length: 150 pages
 - Maximum render request: 30 pages
+- Office conversion timeout: 120 seconds
 - Password-protected, empty, malformed, non-PDF, and out-of-range requests return clean JSON errors
 - Uploaded data is held only for the request and is never persisted
 
