@@ -28,7 +28,7 @@ def _asset_key(info: dict[str, Any], box: tuple[float, float, float, float]) -> 
     return (_digest(info), *(round(v / 0.025) for v in box))
 
 
-def analyze_pdf(data: bytes, min_score: float = 0.55, include_debug: bool = False, max_pages: int = 150) -> AnalysisResponse:
+def analyze_pdf(data: bytes, min_score: float = 0.55, include_debug: bool = False) -> AnalysisResponse:
     try:
         doc = fitz.open(stream=data, filetype="pdf")
     except Exception as exc:
@@ -38,9 +38,6 @@ def analyze_pdf(data: bytes, min_score: float = 0.55, include_debug: bool = Fals
             raise PDFAnalysisError("Password-protected PDFs are not supported")
         if doc.page_count == 0:
             raise PDFAnalysisError("The PDF contains no pages")
-        if doc.page_count > max_pages:
-            raise PDFAnalysisError(f"PDF exceeds the {max_pages}-page limit")
-
         page_images: list[list[dict[str, Any]]] = []
         asset_pages: dict[tuple[Any, ...], set[int]] = {}
         for page_index, page in enumerate(doc):

@@ -179,6 +179,25 @@ def test_invalid_upload() -> None:
     assert response.status_code == 415
 
 
+def test_analysis_and_extraction_accept_more_than_150_pages() -> None:
+    doc = fitz.open()
+    for page_number in range(151):
+        page = doc.new_page(width=100, height=100)
+        page.insert_text((10, 50), f"Page {page_number + 1}", fontsize=8)
+    data = doc.tobytes()
+    doc.close()
+
+    analyzed = analyze_pdf(data)
+    assert analyzed.page_count == 151
+
+    response = TestClient(app).post(
+        "/extract-content",
+        files={"file": ("long.pdf", data, "application/pdf")},
+    )
+    assert response.status_code == 200
+    assert response.json()["page_count"] == 151
+
+
 def test_repeated_asset_is_identified_as_branding() -> None:
     doc = fitz.open()
     logo = png_bytes("logo", (400, 180))

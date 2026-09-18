@@ -16,7 +16,7 @@ def _clean_cell(value: Any) -> str | None:
     return text or None
 
 
-def extract_content(data: bytes, max_pages: int = 150) -> ContentExtractionResponse:
+def extract_content(data: bytes) -> ContentExtractionResponse:
     """Extract native page text and tables without OCR or an LLM."""
     try:
         doc = fitz.open(stream=data, filetype="pdf")
@@ -28,9 +28,6 @@ def extract_content(data: bytes, max_pages: int = 150) -> ContentExtractionRespo
             raise PDFAnalysisError("Password-protected PDFs are not supported")
         if doc.page_count == 0:
             raise PDFAnalysisError("The PDF contains no pages")
-        if doc.page_count > max_pages:
-            raise PDFAnalysisError(f"PDF exceeds the {max_pages}-page limit")
-
         pages: list[ExtractedPage] = []
         for page_number, page in enumerate(doc, start=1):
             text = page.get_text("text", sort=True).replace("\x00", "").strip()

@@ -85,7 +85,6 @@ The exact formula and gates are documented beside `score_page()` in `app/visual_
 ## Limits and error handling
 
 - Maximum upload: 50 MB
-- Maximum analysis length: 150 pages
 - Maximum render request: 30 pages
 - Office conversion timeout: 120 seconds
 - Password-protected, empty, malformed, non-PDF, and out-of-range requests return clean JSON errors
