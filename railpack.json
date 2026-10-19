@@ -5,7 +5,10 @@
     "aptPackages": [
       "libreoffice-writer",
       "libreoffice-impress",
-      "fonts-dejavu-core"
+      "fonts-dejavu-core",
+      "fonts-liberation",
+      "fonts-noto-core",
+      "fonts-noto-color-emoji"
     ]
   }
 }

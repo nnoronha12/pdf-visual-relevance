@@ -1,8 +1,25 @@
-# PDF Visual Relevance API
+# Document Services API
 
-A deterministic, precision-oriented FastAPI microservice that shortlists PDF pages whose visual content is likely to add meaning beyond normal text extraction. It is designed as the inexpensive first stage of a RAG ingestion pipeline; it does not call a vision model.
+A private FastAPI service for document processing. It converts slide HTML to PDF or PPTX and retains the existing PDF analysis, rendering, extraction, and Office conversion routes.
 
 ## API
+
+### Convert HTML to PDF or PPTX
+
+```bash
+curl -X POST https://DOMAIN/convert \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "html": "<!doctype html><html>...</html>",
+    "format": "pdf",
+    "filename": "deck-name.pdf",
+    "deck_id": "97000000-0000-4000-8000-000000000001",
+    "revision": 3
+  }' \
+  --output deck-name.pdf
+```
+
+`format` accepts `pdf` and `pptx`. Both return the generated file as the raw response body with an attachment filename and the correct media type. Chromium honors print CSS, including `@page`, backgrounds, web fonts, and explicit page breaks. PPTX output uses one high-resolution rendered page per slide; it is visually faithful but its individual HTML elements are not editable PowerPoint shapes.
 
 ### Analyze PDF
 
@@ -85,6 +102,8 @@ The exact formula and gates are documented beside `score_page()` in `app/visual_
 ## Limits and error handling
 
 - Maximum upload: 50 MB
+- Maximum HTML payload: 20 MB
+- HTML rendering timeout: 60 seconds
 - Maximum render request: 30 pages
 - Office conversion timeout: 120 seconds
 - Password-protected, empty, malformed, non-PDF, and out-of-range requests return clean JSON errors
@@ -99,6 +118,8 @@ pip install -r requirements-dev.txt
 pytest -q
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+Playwright Chromium is installed in the production image. For local conversion tests, also run `python -m playwright install chromium` after installing requirements.
 
 The generated fixture covers text-only content, a tiny logo, a large screenshot, a vector chart, a vector architecture diagram, a normal text table, and repeated header branding.
 

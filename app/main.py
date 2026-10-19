@@ -1,22 +1,79 @@
 from __future__ import annotations
 
 import io
+from contextlib import asynccontextmanager
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
+from playwright.async_api import async_playwright
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from .content_extraction import extract_content
 from .conversion import DocumentConversionError, convert_office_to_pdf
+from .html_conversion import HTMLConversionError, pdf_to_pptx, render_html_to_pdf
 from .models import AnalysisResponse, ContentExtractionResponse
 from .pdf_analyzer import PDFAnalysisError, analyze_pdf
 from .rendering import render_pages_zip
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_HTML_BYTES = 20 * 1024 * 1024
 
-app = FastAPI(title="PDF Visual Relevance API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(args=["--no-sandbox"])
+        application.state.chromium = browser
+        yield
+        await browser.close()
+
+
+app = FastAPI(title="Document Services API", version="1.1.0", lifespan=lifespan)
+
+
+class ConvertRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    html: str = Field(min_length=1)
+    format: str
+    filename: str = Field(min_length=1, max_length=255)
+    deck_id: str = Field(min_length=1, max_length=128)
+    revision: int = Field(ge=0)
+
+    @field_validator("format")
+    @classmethod
+    def supported_format(cls, value: str) -> str:
+        normalized = value.lower()
+        if normalized not in {"pdf", "pptx"}:
+            raise ValueError("format must be either 'pdf' or 'pptx'")
+        return normalized
+
+    @field_validator("html")
+    @classmethod
+    def html_size_limit(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > MAX_HTML_BYTES:
+            raise ValueError("html exceeds the 20 MB request limit")
+        return value
+
+
+def output_filename(requested_name: str, output_format: str) -> str:
+    # Strip path components/control characters and make the extension agree
+    # with the actual response type.
+    name = requested_name.replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(character for character in name if character >= " " and character != "\x7f").strip()
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return f"{stem or 'deck'}.{output_format}"
+
+
+def attachment_header(filename: str) -> str:
+    ascii_name = filename.encode("ascii", "ignore").decode() or f"deck.{filename.rsplit('.', 1)[-1]}"
+    ascii_name = ascii_name.replace('"', "")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
 
 
 async def read_pdf(upload: UploadFile) -> bytes:
@@ -45,6 +102,11 @@ async def conversion_error_handler(_request, exc: DocumentConversionError):
     return JSONResponse(status_code=422, content={"success": False, "error": str(exc)})
 
 
+@app.exception_handler(HTMLConversionError)
+async def html_conversion_error_handler(_request, exc: HTMLConversionError):
+    return JSONResponse(status_code=422, content={"success": False, "error": str(exc)})
+
+
 @app.exception_handler(HTTPException)
 async def http_error_handler(_request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"success": False, "error": str(exc.detail)})
@@ -52,12 +114,33 @@ async def http_error_handler(_request: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(_request: Request, exc: RequestValidationError):
-    return JSONResponse(status_code=422, content={"success": False, "error": "Invalid request fields", "details": exc.errors()})
+    details = jsonable_encoder(exc.errors(), custom_encoder={Exception: str})
+    return JSONResponse(status_code=422, content={"success": False, "error": "Invalid request fields", "details": details})
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/convert")
+async def convert_html_endpoint(payload: ConvertRequest, request: Request) -> Response:
+    pdf = await render_html_to_pdf(request.app.state.chromium, payload.html)
+    filename = output_filename(payload.filename, payload.format)
+    headers = {
+        "Content-Disposition": attachment_header(filename),
+        "X-Deck-Id": payload.deck_id,
+        "X-Deck-Revision": str(payload.revision),
+    }
+    if payload.format == "pdf":
+        return Response(content=pdf, media_type="application/pdf", headers=headers)
+
+    pptx = await run_in_threadpool(pdf_to_pptx, pdf)
+    return Response(
+        content=pptx,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers=headers,
+    )
 
 
 @app.post("/analyze-pdf", response_model=AnalysisResponse, response_model_exclude_none=True)
