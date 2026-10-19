@@ -33,7 +33,7 @@ async def lifespan(application: FastAPI):
         await browser.close()
 
 
-app = FastAPI(title="Document Services API", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="FileForge MCP", version="1.1.0", lifespan=lifespan)
 
 
 class ConvertRequest(BaseModel):

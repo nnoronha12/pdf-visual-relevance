@@ -1,4 +1,6 @@
-# Document Services API
+# FileForge MCP
+
+Legacy Phase 1 REST service. MCP support is available on the current development branches.
 
 A private FastAPI service for document processing. It converts slide HTML to PDF or PPTX and retains the existing PDF analysis, rendering, extraction, and Office conversion routes.
 

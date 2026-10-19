@@ -1,1 +1,1 @@
-"""PDF visual relevance service."""
+"""FileForge MCP document conversion service."""
