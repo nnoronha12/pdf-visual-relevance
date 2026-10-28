@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 
 import fitz
-from playwright.async_api import Browser, Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Browser, Error as PlaywrightError, Page, TimeoutError as PlaywrightTimeoutError
 from pptx import Presentation
 from pptx.util import Inches
 
@@ -16,30 +16,53 @@ RENDER_TIMEOUT_MS = 60_000
 PPTX_RENDER_DPI = 144
 
 
+async def load_html(page: Page, html: str) -> None:
+    """Loads the HTML and waits for its fonts and images."""
+    await page.set_content(html, wait_until="load", timeout=RENDER_TIMEOUT_MS)
+    try:
+        await page.wait_for_load_state("networkidle", timeout=15_000)
+    except PlaywrightTimeoutError:
+        # Some slide templates keep a connection open. Loaded fonts and
+        # images below are the assets that matter to the rendered file.
+        pass
+    await page.evaluate(
+        """async () => {
+            if (document.fonts?.ready) await document.fonts.ready;
+            await Promise.all(Array.from(document.images).map((image) => {
+                if (image.complete) return Promise.resolve();
+                return new Promise((resolve) => {
+                    image.addEventListener('load', resolve, { once: true });
+                    image.addEventListener('error', resolve, { once: true });
+                });
+            }));
+        }"""
+    )
+
+
+# In a right-to-left document a slide wider than its print frame overflows to
+# the left, so print CSS that scales it from the top-left corner moves it off
+# the page and it is cut across pages. Lay the containers out left to right;
+# each slide keeps its own direction, so its content is unchanged.
+KEEP_SLIDES_ON_PAGE = """() => {
+    const slides = Array.from(document.querySelectorAll('.slide'))
+        .filter((s) => !(s.parentElement && s.parentElement.closest('.slide')));
+    const containers = new Set();
+    for (const slide of slides) {
+        slide.style.setProperty('direction', getComputedStyle(slide).direction, 'important');
+        for (let node = slide.parentElement; node; node = node.parentElement) containers.add(node);
+    }
+    for (const node of containers) node.style.setProperty('direction', 'ltr', 'important');
+    return slides.length;
+}"""
+
+
 async def render_html_to_pdf(browser: Browser, html: str) -> bytes:
     context = await browser.new_context()
     page = await context.new_page()
     page.set_default_timeout(RENDER_TIMEOUT_MS)
     try:
-        await page.set_content(html, wait_until="load", timeout=RENDER_TIMEOUT_MS)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=15_000)
-        except PlaywrightTimeoutError:
-            # Some slide templates keep a connection open. Loaded fonts and
-            # images below are the assets that matter to the rendered file.
-            pass
-        await page.evaluate(
-            """async () => {
-                if (document.fonts?.ready) await document.fonts.ready;
-                await Promise.all(Array.from(document.images).map((image) => {
-                    if (image.complete) return Promise.resolve();
-                    return new Promise((resolve) => {
-                        image.addEventListener('load', resolve, { once: true });
-                        image.addEventListener('error', resolve, { once: true });
-                    });
-                }));
-            }"""
-        )
+        await load_html(page, html)
+        await page.evaluate(KEEP_SLIDES_ON_PAGE)
         await page.emulate_media(media="print")
         return await page.pdf(print_background=True, prefer_css_page_size=True)
     except (PlaywrightError, PlaywrightTimeoutError) as exc:
@@ -49,7 +72,7 @@ async def render_html_to_pdf(browser: Browser, html: str) -> bytes:
 
 
 def pdf_to_pptx(pdf: bytes) -> bytes:
-    """Create a visually faithful PPTX with one rendered PDF page per slide."""
+    """Create a PPTX with one rendered PDF page per slide (pictures only, not editable)."""
     try:
         document = fitz.open(stream=pdf, filetype="pdf")
     except Exception as exc:

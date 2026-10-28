@@ -21,7 +21,26 @@ curl -X POST https://DOMAIN/convert \
   --output deck-name.pdf
 ```
 
-`format` accepts `pdf` and `pptx`. Both return the generated file as the raw response body with an attachment filename and the correct media type. Chromium honors print CSS, including `@page`, backgrounds, web fonts, and explicit page breaks. PPTX output uses one high-resolution rendered page per slide; it is visually faithful but its individual HTML elements are not editable PowerPoint shapes.
+`format` accepts `pdf` and `pptx`. Both return the generated file as the raw response body with an attachment filename and the correct media type. Chromium honors print CSS, including `@page`, backgrounds, web fonts, and explicit page breaks.
+
+#### Editable PPTX
+
+PPTX output is editable by default. The optional field `pptx_mode` chooses how slides are built:
+
+| `pptx_mode` | Result |
+|---|---|
+| `editable` (default) | Each top-level `.slide` element becomes a PowerPoint slide. Text becomes text boxes, plain boxes and border rules become shapes, and `<img>` elements and cover-fitted background photos become pictures. Whatever cannot be rebuilt as a PowerPoint object (gradients, patterns, rotated or masked decoration, a photo under an overlay) stays in a background picture, drawn without the parts that were rebuilt. |
+| `image` | One rendered picture per slide (the earlier behaviour). Nothing is editable. |
+
+The response header `X-Pptx-Mode` says which method produced the file. When the HTML has no `.slide` elements, or the editable build fails, the service logs the error and returns the `image` result instead, so an export never fails where the picture method would succeed.
+
+How the editable build works (`app/editable_pptx.py`, `app/editable_pptx.js`):
+
+- Slides are measured in Chromium at their own size (1920×1080 px gives a 13.333×7.5 in slide; 1 px = 0.5 pt).
+- Text keeps its font, size, weight, colour, letter spacing, casing, alignment and line height. Right-to-left text (Arabic) gets right-to-left paragraphs and the `ar-AE` language. Text boxes are named after the element's `data-slot` when it has one.
+- `::before`/`::after` text, including CSS counters such as `01`, `02`, becomes real text. If doing so would move anything on the slide, the slide keeps the original pseudo-elements and those numbers stay in the background picture.
+- A box or picture is only rebuilt when nothing that stays in the background picture is drawn on top of it (checked by hit-testing), so stacking order is kept.
+- PowerPoint uses the fonts named in the CSS. Text sits where the browser put it when the user's computer has the same font (or a metric-compatible one, such as Liberation Sans for Arial).
 
 ### Analyze PDF
 
@@ -122,6 +141,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Playwright Chromium is installed in the production image. For local conversion tests, also run `python -m playwright install chromium` after installing requirements.
+
+`tests/test_editable_pptx.py` covers editable text and runs, Arabic right-to-left paragraphs, native shapes, pictures, CSS counters, a photo under an overlay staying in the background, `pptx_mode: "image"` and the fallback for HTML without slides.
 
 The generated fixture covers text-only content, a tiny logo, a large screenshot, a vector chart, a vector architecture diagram, a normal text table, and repeated header branding.
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import io
+import logging
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Literal
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -15,10 +17,13 @@ from starlette.concurrency import run_in_threadpool
 
 from .content_extraction import extract_content
 from .conversion import DocumentConversionError, convert_office_to_pdf
+from .editable_pptx import render_html_to_editable_pptx
 from .html_conversion import HTMLConversionError, pdf_to_pptx, render_html_to_pdf
 from .models import AnalysisResponse, ContentExtractionResponse
 from .pdf_analyzer import PDFAnalysisError, analyze_pdf
 from .rendering import render_pages_zip
+
+logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_HTML_BYTES = 20 * 1024 * 1024
@@ -44,6 +49,9 @@ class ConvertRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     deck_id: str = Field(min_length=1, max_length=128)
     revision: int = Field(ge=0)
+    # "editable" (default): text boxes, shapes and pictures PowerPoint can edit.
+    # "image": one picture per slide, the original behaviour.
+    pptx_mode: Literal["editable", "image"] = "editable"
 
     @field_validator("format")
     @classmethod
@@ -125,7 +133,7 @@ def health() -> dict[str, str]:
 
 @app.post("/convert")
 async def convert_html_endpoint(payload: ConvertRequest, request: Request) -> Response:
-    pdf = await render_html_to_pdf(request.app.state.chromium, payload.html)
+    browser = request.app.state.chromium
     filename = output_filename(payload.filename, payload.format)
     headers = {
         "Content-Disposition": attachment_header(filename),
@@ -133,9 +141,22 @@ async def convert_html_endpoint(payload: ConvertRequest, request: Request) -> Re
         "X-Deck-Revision": str(payload.revision),
     }
     if payload.format == "pdf":
+        pdf = await render_html_to_pdf(browser, payload.html)
         return Response(content=pdf, media_type="application/pdf", headers=headers)
 
-    pptx = await run_in_threadpool(pdf_to_pptx, pdf)
+    pptx = None
+    mode = "image"
+    if payload.pptx_mode == "editable":
+        try:
+            pptx = await render_html_to_editable_pptx(browser, payload.html, Path(filename).stem)
+            mode = "editable"
+        except Exception:
+            # Never fail an export the picture method can still produce.
+            logger.exception("Editable PPTX failed for deck %s; falling back to pictures", payload.deck_id)
+    if pptx is None:
+        pdf = await render_html_to_pdf(browser, payload.html)
+        pptx = await run_in_threadpool(pdf_to_pptx, pdf)
+    headers["X-Pptx-Mode"] = mode
     return Response(
         content=pptx,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
